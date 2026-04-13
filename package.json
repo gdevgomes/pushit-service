@@ -9,7 +9,8 @@
     "dev": "ts-node src/index.ts",
     "dev:pretty": "ts-node src/index.ts | pino-pretty",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

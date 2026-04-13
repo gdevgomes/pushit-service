@@ -3,3 +3,4 @@ dist/
 .env
 serviceAccountKey.json
 init.md
+.env.bak

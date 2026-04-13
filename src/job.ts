@@ -1,6 +1,6 @@
 import { db } from './db';
 import { logger } from './logger';
-import { NOTIFICATIONS_DUE, PUSH_TOKENS_FOR_GROUP, INSERT_NOTIFICATION_LOG } from './queries';
+import { NOTIFICATIONS_DUE, NOTIFICATIONS_DUE_FORCED, PUSH_TOKENS_FOR_GROUP, INSERT_NOTIFICATION_LOG } from './queries';
 import type { PushProvider } from './push';
 
 export interface JobStats {
@@ -43,7 +43,7 @@ interface TokenRow {
   push_token: string;
 }
 
-export async function runJob(provider: PushProvider, state: JobState): Promise<void> {
+export async function runJob(provider: PushProvider, state: JobState, force = false): Promise<void> {
   if (state.isRunning) {
     logger.warn('job already running, skipping tick');
     return;
@@ -51,17 +51,18 @@ export async function runJob(provider: PushProvider, state: JobState): Promise<v
 
   state.isRunning = true;
   try {
-    await _runJob(provider, state);
+    await _runJob(provider, state, force);
   } finally {
     state.isRunning = false;
   }
 }
 
-async function _runJob(provider: PushProvider, state: JobState): Promise<void> {
+async function _runJob(provider: PushProvider, state: JobState, force: boolean): Promise<void> {
   const jobStart = Date.now();
-  logger.info('job started');
+  logger.info({ force }, 'job started');
 
-  const { rows: notifications } = await db.query<NotificationRow>(NOTIFICATIONS_DUE);
+  const query = force ? NOTIFICATIONS_DUE_FORCED : NOTIFICATIONS_DUE;
+  const { rows: notifications } = await db.query<NotificationRow>(query);
   logger.info({ due: notifications.length }, 'notifications due');
 
   const stats: JobStats = {

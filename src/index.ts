@@ -15,7 +15,7 @@ const task = cron.schedule('* * * * *', () => {
   });
 });
 
-const app = createServer(state);
+const app = createServer(state, provider);
 const server = app.listen(config.PORT, () => {
   logger.info({ port: config.PORT }, 'HTTP server listening');
 });

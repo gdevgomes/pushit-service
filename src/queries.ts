@@ -1,6 +1,21 @@
 // Sem condição de MINUTE: o NOT EXISTS (status='sent') garante idempotência para
 // envios bem-sucedidos. A ausência do filtro de minuto permite retry automático
 // para notificações com status 'failed' dentro do horário 6:xx.
+export const NOTIFICATIONS_DUE_FORCED = `
+  SELECT n.id, n.name, n.description, n.group_id, n.timezone
+  FROM notifications n
+  WHERE
+    n.month = EXTRACT(MONTH FROM NOW() AT TIME ZONE n.timezone)
+    AND n.day = EXTRACT(DAY FROM NOW() AT TIME ZONE n.timezone)
+    AND NOT EXISTS (
+      SELECT 1 FROM notification_logs nl
+      WHERE nl.notification_id = n.id
+        AND nl.status = 'sent'
+        AND (nl.sent_at AT TIME ZONE n.timezone)::date
+            = (NOW() AT TIME ZONE n.timezone)::date
+    )
+`;
+
 export const NOTIFICATIONS_DUE = `
   SELECT n.id, n.name, n.description, n.group_id, n.timezone
   FROM notifications n
