@@ -32,10 +32,10 @@ export function createState(): JobState {
 }
 
 interface NotificationRow {
-  id: string;
+  id: number;
   name: string;
   description: string;
-  group_id: string;
+  group_id: number;
   timezone: string;
 }
 
