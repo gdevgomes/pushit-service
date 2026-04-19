@@ -17,7 +17,6 @@ ENV NODE_ENV=production
 COPY --from=builder /app/package*.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/serviceAccountKey.json ./serviceAccountKey.json
 
 # O Cloud Run ignora o EXPOSE, mas é boa prática documentar a 8080
 EXPOSE 8080
