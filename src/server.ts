@@ -2,11 +2,18 @@ import express from 'express';
 import { runJob, type JobState } from './job';
 import type { PushProvider } from './push';
 import { config } from './config';
+import { db } from './db';
+import { NOTIFICATIONS_UPCOMING, NOTIFICATIONS_RECENT_SENT } from './queries';
 
 export function createServer(state: JobState, provider: PushProvider): express.Express {
   const app = express();
 
-  app.get('/status', (_req, res) => {
+  app.get('/status', async (_req, res) => {
+    const [upcoming, recentSent] = await Promise.all([
+      db.query(NOTIFICATIONS_UPCOMING).then((r) => r.rows),
+      db.query(NOTIFICATIONS_RECENT_SENT).then((r) => r.rows),
+    ]);
+
     res.json({
       status: 'ok',
       uptime: Math.floor((Date.now() - state.startedAt.getTime()) / 1000),
@@ -14,6 +21,8 @@ export function createServer(state: JobState, provider: PushProvider): express.E
       lastJobStats: state.lastStats,
       totalSent: state.totalSent,
       totalFailed: state.totalFailed,
+      upcoming,
+      recentSent,
     });
   });
 

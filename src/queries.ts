@@ -20,7 +20,7 @@ export const NOTIFICATIONS_DUE = `
   SELECT n.id, n.name, n.description, n.group_id, n.timezone
   FROM notifications n
   WHERE
-    EXTRACT(HOUR FROM NOW() AT TIME ZONE n.timezone) = 6
+    EXTRACT(HOUR FROM NOW() AT TIME ZONE n.timezone) = COALESCE(n.hour, 6)
     AND n.month = EXTRACT(MONTH FROM NOW() AT TIME ZONE n.timezone)
     AND n.day   = EXTRACT(DAY   FROM NOW() AT TIME ZONE n.timezone)
     AND NOT EXISTS (
@@ -30,6 +30,54 @@ export const NOTIFICATIONS_DUE = `
         AND (nl.sent_at AT TIME ZONE n.timezone)::date
             = (NOW() AT TIME ZONE n.timezone)::date
     )
+`;
+
+export const NOTIFICATIONS_UPCOMING = `
+  SELECT
+    n.id,
+    n.name,
+    n.description,
+    n.group_id,
+    n.month,
+    n.day,
+    COALESCE(n.hour, 6) AS hour,
+    n.timezone,
+    CASE
+      WHEN make_timestamptz(
+             EXTRACT(YEAR FROM NOW() AT TIME ZONE n.timezone)::int,
+             n.month, n.day, COALESCE(n.hour, 6), 0, 0, n.timezone
+           ) > NOW()
+      THEN make_timestamptz(
+             EXTRACT(YEAR FROM NOW() AT TIME ZONE n.timezone)::int,
+             n.month, n.day, COALESCE(n.hour, 6), 0, 0, n.timezone
+           )
+      ELSE make_timestamptz(
+             EXTRACT(YEAR FROM NOW() AT TIME ZONE n.timezone)::int + 1,
+             n.month, n.day, COALESCE(n.hour, 6), 0, 0, n.timezone
+           )
+    END AS next_fire_at
+  FROM notifications n
+  ORDER BY next_fire_at ASC
+  LIMIT 10
+`;
+
+export const NOTIFICATIONS_RECENT_SENT = `
+  SELECT
+    n.id,
+    n.name,
+    n.description,
+    n.group_id,
+    n.month,
+    n.day,
+    COALESCE(n.hour, 6) AS hour,
+    n.timezone,
+    nl.sent_at,
+    nl.status
+  FROM notification_logs nl
+  JOIN notifications n ON n.id = nl.notification_id
+  WHERE nl.status = 'sent'
+  ORDER BY nl.sent_at DESC
+  LIMIT 10
 `;
 
 export const PUSH_TOKENS_FOR_GROUP = `
