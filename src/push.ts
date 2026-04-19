@@ -10,11 +10,11 @@ const NON_RETRYABLE_CODES = new Set([
 const RETRY_DELAYS_MS = [0, 1_000, 3_000];
 
 export interface PushProvider {
-  send(token: string, title: string, body: string): Promise<void>;
+  send(token: string, title: string, body: string, data?: Record<string, string>): Promise<void>;
 }
 
 export class FCMProvider implements PushProvider {
-  async send(token: string, title: string, body: string): Promise<void> {
+  async send(token: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
     let lastError: Error = new Error('Unknown error');
 
     for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
@@ -26,6 +26,7 @@ export class FCMProvider implements PushProvider {
         await messaging.send({
           token,
           notification: { title, body },
+          data: data ?? {},
         });
         return;
       } catch (err) {

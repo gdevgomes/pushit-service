@@ -90,7 +90,12 @@ async function _runJob(provider: PushProvider, state: JobState, force: boolean):
 
     const results = await Promise.allSettled(
       tokenRows.map((row) =>
-        provider.send(row.push_token, notification.name, notification.description),
+        provider.send(row.push_token, notification.name, notification.description, {
+          notificationId: String(notification.id),
+          groupId: String(notification.group_id),
+          name: notification.name,
+          description: notification.description ?? '',
+        }),
       ),
     );
 
