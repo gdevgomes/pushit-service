@@ -89,6 +89,15 @@ export const PUSH_TOKENS_FOR_GROUP = `
     AND up.push_token <> ''
 `;
 
+export const PUSH_TOKEN_FOR_USER = `
+  SELECT push_token
+  FROM user_profiles
+  WHERE user_id = $1
+    AND push_token IS NOT NULL
+    AND push_token <> ''
+  LIMIT 1
+`;
+
 export const INSERT_NOTIFICATION_LOG = `
   INSERT INTO notification_logs (notification_id, group_id, sent_at, status, error)
   VALUES ($1, $2, NOW(), $3, $4)
