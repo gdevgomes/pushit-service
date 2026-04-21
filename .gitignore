@@ -4,3 +4,4 @@ dist/
 serviceAccountKey.json
 init.md
 .env.bak
+deploy.sh
