@@ -1,7 +1,14 @@
+import pLimit from 'p-limit';
 import { db } from './db';
 import { logger } from './logger';
-import { NOTIFICATIONS_DUE, NOTIFICATIONS_DUE_FORCED, PUSH_TOKENS_FOR_GROUP, INSERT_NOTIFICATION_LOG } from './queries';
+import {
+  NOTIFICATIONS_DUE_WITH_TOKENS,
+  BULK_INSERT_NOTIFICATION_LOGS,
+} from './queries';
 import type { PushProvider } from './push';
+
+const BATCH_SIZE = 200;
+const FCM_CONCURRENCY = 50;
 
 export interface JobStats {
   due: number;
@@ -31,16 +38,22 @@ export function createState(): JobState {
   };
 }
 
-interface NotificationRow {
+interface NotificationTokenRow {
   id: number;
   name: string;
   description: string;
   group_id: number;
   timezone: string;
+  push_token: string;
 }
 
-interface TokenRow {
-  push_token: string;
+interface NotificationWork {
+  id: number;
+  name: string;
+  description: string;
+  group_id: number;
+  timezone: string;
+  tokens: string[];
 }
 
 export async function runJob(provider: PushProvider, state: JobState, force = false): Promise<void> {
@@ -61,87 +74,110 @@ async function _runJob(provider: PushProvider, state: JobState, force: boolean):
   const jobStart = Date.now();
   logger.info({ force }, 'job started');
 
-  const query = force ? NOTIFICATIONS_DUE_FORCED : NOTIFICATIONS_DUE;
-  const { rows: notifications } = await db.query<NotificationRow>(query);
-  logger.info({ due: notifications.length }, 'notifications due');
+  const stats: JobStats = { due: 0, sent: 0, failed: 0, tokensDelivered: 0, tokensFailed: 0 };
+  const limit = pLimit(FCM_CONCURRENCY);
+  const query = NOTIFICATIONS_DUE_WITH_TOKENS(force);
 
-  const stats: JobStats = {
-    due: notifications.length,
-    sent: 0,
-    failed: 0,
-    tokensDelivered: 0,
-    tokensFailed: 0,
-  };
+  let offset = 0;
+  while (true) {
+    const { rows } = await db.query<NotificationTokenRow>(query, [BATCH_SIZE, offset]);
+    if (rows.length === 0) break;
 
-  for (const notification of notifications) {
-    const childLog = logger.child({
-      notificationId: notification.id,
-      groupId: notification.group_id,
-    });
+    const byNotification = groupByNotification(rows);
+    logger.info({ batch: offset / BATCH_SIZE + 1, notifications: byNotification.length }, 'processing batch');
 
-    const { rows: tokenRows } = await db.query<TokenRow>(PUSH_TOKENS_FOR_GROUP, [
-      notification.group_id,
-    ]);
+    const logs = await processBatch(byNotification, provider, limit, stats);
 
-    if (tokenRows.length === 0) {
-      childLog.info('no tokens for group, skipping');
-      continue;
+    if (logs.length > 0) {
+      const params = logs.flatMap((l) => [l.notification_id, l.group_id, l.status, l.error]);
+      await db.query(BULK_INSERT_NOTIFICATION_LOGS(logs.length), params);
     }
 
-    const results = await Promise.allSettled(
-      tokenRows.map((row) =>
-        provider.send(row.push_token, notification.name, notification.description, {
-          notificationId: String(notification.id),
-          groupId: String(notification.group_id),
-          name: notification.name,
-          description: notification.description ?? '',
-        }),
-      ),
-    );
-
-    const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter(
-      (r): r is PromiseRejectedResult => r.status === 'rejected',
-    );
-
-    const sent = fulfilled.length;
-    const failed = rejected.length;
-
-    stats.tokensDelivered += sent;
-    stats.tokensFailed += failed;
-
-    const status = sent >= 1 ? 'sent' : 'failed';
-    const errorPayload =
-      failed === 0
-        ? null
-        : JSON.stringify({
-            total: tokenRows.length,
-            sent,
-            failed,
-            failures: rejected.map((r) => r.reason?.message ?? String(r.reason)),
-          });
-
-    if (status === 'sent') {
-      stats.sent++;
-      state.totalSent++;
-    } else {
-      stats.failed++;
-      state.totalFailed++;
-    }
-
-    await db.query(INSERT_NOTIFICATION_LOG, [
-      notification.id,
-      notification.group_id,
-      status,
-      errorPayload,
-    ]);
-
-    childLog.info({ sent, failed, status }, 'notification processed');
+    offset += BATCH_SIZE;
   }
 
+  state.totalSent += stats.sent;
+  state.totalFailed += stats.failed;
   state.lastRun = new Date();
   state.lastStats = stats;
 
-  const durationMs = Date.now() - jobStart;
-  logger.info({ ...stats, durationMs }, 'job completed');
+  logger.info({ ...stats, durationMs: Date.now() - jobStart }, 'job completed');
+}
+
+function groupByNotification(rows: NotificationTokenRow[]): NotificationWork[] {
+  const map = new Map<number, NotificationWork>();
+  for (const row of rows) {
+    if (!map.has(row.id)) {
+      map.set(row.id, {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        group_id: row.group_id,
+        timezone: row.timezone,
+        tokens: [],
+      });
+    }
+    map.get(row.id)!.tokens.push(row.push_token);
+  }
+  return Array.from(map.values());
+}
+
+interface LogEntry {
+  notification_id: number;
+  group_id: number;
+  status: 'sent' | 'failed';
+  error: string | null;
+}
+
+async function processBatch(
+  notifications: NotificationWork[],
+  provider: PushProvider,
+  limit: ReturnType<typeof pLimit>,
+  stats: JobStats,
+): Promise<LogEntry[]> {
+  stats.due += notifications.length;
+
+  const results = await Promise.allSettled(
+    notifications.map((n) =>
+      limit(async () => {
+        const tokenResults = await Promise.allSettled(
+          n.tokens.map((token) =>
+            provider.send(token, n.name, n.description, {
+              notificationId: String(n.id),
+              groupId: String(n.group_id),
+              name: n.name,
+              description: n.description ?? '',
+            }),
+          ),
+        );
+
+        const sent = tokenResults.filter((r) => r.status === 'fulfilled').length;
+        const failed = tokenResults.filter((r) => r.status === 'rejected').length;
+
+        stats.tokensDelivered += sent;
+        stats.tokensFailed += failed;
+
+        const status: 'sent' | 'failed' = sent >= 1 ? 'sent' : 'failed';
+        if (status === 'sent') { stats.sent++; } else { stats.failed++; }
+
+        const error =
+          failed === 0
+            ? null
+            : JSON.stringify({
+                total: n.tokens.length,
+                sent,
+                failed,
+                failures: tokenResults
+                  .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+                  .map((r) => r.reason?.message ?? String(r.reason)),
+              });
+
+        return { notification_id: n.id, group_id: n.group_id, status, error } satisfies LogEntry;
+      }),
+    ),
+  );
+
+  return results
+    .filter((r): r is PromiseFulfilledResult<LogEntry> => r.status === 'fulfilled')
+    .map((r) => r.value);
 }

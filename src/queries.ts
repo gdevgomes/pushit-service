@@ -80,13 +80,31 @@ export const NOTIFICATIONS_RECENT_SENT = `
   LIMIT 10
 `;
 
-export const PUSH_TOKENS_FOR_GROUP = `
-  SELECT up.push_token
-  FROM users_groups ug
+export const NOTIFICATIONS_DUE_WITH_TOKENS = (force: boolean) => `
+  SELECT
+    n.id, n.name, n.description, n.group_id, n.timezone,
+    up.push_token
+  FROM notifications n
+  JOIN users_groups ug ON ug.group_id = n.group_id
   JOIN user_profiles up ON up.user_id = ug.user_id
-  WHERE ug.group_id = $1
+  WHERE
+    ${force
+      ? `n.month = EXTRACT(MONTH FROM NOW() AT TIME ZONE n.timezone)
+    AND n.day   = EXTRACT(DAY   FROM NOW() AT TIME ZONE n.timezone)`
+      : `EXTRACT(HOUR FROM NOW() AT TIME ZONE n.timezone) = COALESCE(n.hour, 6)
+    AND n.month = EXTRACT(MONTH FROM NOW() AT TIME ZONE n.timezone)
+    AND n.day   = EXTRACT(DAY   FROM NOW() AT TIME ZONE n.timezone)`}
     AND up.push_token IS NOT NULL
     AND up.push_token <> ''
+    AND NOT EXISTS (
+      SELECT 1 FROM notification_logs nl
+      WHERE nl.notification_id = n.id
+        AND nl.status = 'sent'
+        AND (nl.sent_at AT TIME ZONE n.timezone)::date
+            = (NOW() AT TIME ZONE n.timezone)::date
+    )
+  ORDER BY n.id
+  LIMIT $1 OFFSET $2
 `;
 
 export const PUSH_TOKEN_FOR_USER = `
@@ -97,6 +115,14 @@ export const PUSH_TOKEN_FOR_USER = `
     AND push_token <> ''
   LIMIT 1
 `;
+
+export const BULK_INSERT_NOTIFICATION_LOGS = (count: number) => {
+  const values = Array.from({ length: count }, (_, i) => {
+    const b = i * 4;
+    return `($${b + 1}, $${b + 2}, NOW(), $${b + 3}, $${b + 4})`;
+  }).join(', ');
+  return `INSERT INTO notification_logs (notification_id, group_id, sent_at, status, error) VALUES ${values}`;
+};
 
 export const INSERT_NOTIFICATION_LOG = `
   INSERT INTO notification_logs (notification_id, group_id, sent_at, status, error)
