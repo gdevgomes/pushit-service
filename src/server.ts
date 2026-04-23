@@ -30,8 +30,8 @@ export function createServer(state: JobState, provider: PushProvider): express.E
   app.post('/trigger/user', async (req, res) => {
     const secret = config.TRIGGER_SECRET;
     if (secret) {
-      const auth = req.headers['authorization'];
-      if (auth !== `Bearer ${secret}`) {
+      const auth = req.headers['x-trigger-secret'];
+      if (auth !== secret) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
@@ -59,8 +59,8 @@ export function createServer(state: JobState, provider: PushProvider): express.E
   app.post('/trigger', (req, res) => {
     const secret = config.TRIGGER_SECRET;
     if (secret) {
-      const auth = req.headers['authorization'];
-      if (auth !== `Bearer ${secret}`) {
+      const auth = req.headers['x-trigger-secret'];
+      if (auth !== secret) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
