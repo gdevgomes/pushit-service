@@ -72,6 +72,8 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
+  if (!process.env.RUN_INTEGRATION) return;
+
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
@@ -143,7 +145,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('job — integração', () => {
+describe.skipIf(!process.env.RUN_INTEGRATION)('job — integração', () => {
   it('envia notificações para ambos os grupos e registra logs', async () => {
     const state = createState();
     const provider = new FCMProvider();

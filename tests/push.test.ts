@@ -1,24 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('../src/firebase', () => ({
+  messaging: { send: vi.fn() },
+}));
+
 import { FCMProvider } from '../src/push';
+import { messaging } from '../src/firebase';
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
+const mockSend = vi.mocked(messaging.send);
 
-function makeOkResponse(success = 1, failure = 0, errorCode?: string) {
-  return {
-    ok: true,
-    status: 200,
-    json: () =>
-      Promise.resolve({
-        success,
-        failure,
-        results: errorCode ? [{ error: errorCode }] : [{ message_id: 'ok' }],
-      }),
-  };
-}
-
-function makeHttpError(status: number) {
-  return { ok: false, status, json: () => Promise.resolve({}) };
+function makeFirebaseError(code: string): Error & { code: string } {
+  const err = new Error(code) as Error & { code: string };
+  err.code = code;
+  return err;
 }
 
 describe('FCMProvider', () => {
@@ -26,8 +20,8 @@ describe('FCMProvider', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    provider = new FCMProvider('test-server-key');
-    mockFetch.mockReset();
+    provider = new FCMProvider();
+    mockSend.mockReset();
   });
 
   afterEach(() => {
@@ -35,81 +29,81 @@ describe('FCMProvider', () => {
   });
 
   it('envia com sucesso na primeira tentativa', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse());
+    mockSend.mockResolvedValueOnce('msg-id');
 
     await expect(provider.send('token-abc', 'Título', 'Corpo')).resolves.toBeUndefined();
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
-  it('envia payload e headers corretos para o FCM', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse());
+  it('envia payload correto para o firebase-admin', async () => {
+    mockSend.mockResolvedValueOnce('msg-id');
 
     await provider.send('device-token', 'Aniversário', 'Hoje é seu dia!');
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      'https://fcm.googleapis.com/fcm/send',
+    expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({
-          Authorization: 'key=test-server-key',
-          'Content-Type': 'application/json',
-        }),
-        body: JSON.stringify({
-          to: 'device-token',
-          notification: { title: 'Aniversário', body: 'Hoje é seu dia!' },
-        }),
+        token: 'device-token',
+        notification: { title: 'Aniversário', body: 'Hoje é seu dia!' },
       }),
     );
   });
 
-  it('retenta quando FCM retorna Unavailable e sucede na segunda tentativa', async () => {
-    mockFetch
-      .mockResolvedValueOnce(makeOkResponse(0, 1, 'Unavailable'))
-      .mockResolvedValueOnce(makeOkResponse());
+  it('retenta em erro retryável e sucede na segunda tentativa', async () => {
+    mockSend
+      .mockRejectedValueOnce(new Error('messaging/internal-error'))
+      .mockResolvedValueOnce('msg-id');
 
     const promise = provider.send('token', 'title', 'body');
     await vi.runAllTimersAsync();
 
     await expect(promise).resolves.toBeUndefined();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
-  it('retenta em HTTP 5xx e falha após esgotar as 3 tentativas', async () => {
-    mockFetch.mockResolvedValue(makeHttpError(503));
+  it('falha após esgotar as 3 tentativas em erro retryável', async () => {
+    mockSend.mockRejectedValue(new Error('messaging/internal-error'));
 
     const promise = provider.send('token', 'title', 'body');
-    promise.catch(() => {}); // evita unhandled rejection enquanto timers avançam
+    promise.catch(() => {});
     await vi.runAllTimersAsync();
 
-    await expect(promise).rejects.toThrow('FCM HTTP 503');
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    await expect(promise).rejects.toThrow();
+    expect(mockSend).toHaveBeenCalledTimes(3);
   });
 
   it('não retenta em InvalidRegistration', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse(0, 1, 'InvalidRegistration'));
+    mockSend.mockRejectedValueOnce(
+      makeFirebaseError('messaging/invalid-registration-token'),
+    );
 
-    await expect(provider.send('token', 'title', 'body')).rejects.toThrow('InvalidRegistration');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await expect(provider.send('token', 'title', 'body')).rejects.toThrow();
+    expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
   it('não retenta em NotRegistered', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse(0, 1, 'NotRegistered'));
+    mockSend.mockRejectedValueOnce(
+      makeFirebaseError('messaging/registration-token-not-registered'),
+    );
 
-    await expect(provider.send('token', 'title', 'body')).rejects.toThrow('NotRegistered');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await expect(provider.send('token', 'title', 'body')).rejects.toThrow();
+    expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
   it('não retenta em MismatchSenderId', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse(0, 1, 'MismatchSenderId'));
+    mockSend.mockRejectedValueOnce(
+      makeFirebaseError('messaging/mismatched-credential'),
+    );
 
-    await expect(provider.send('token', 'title', 'body')).rejects.toThrow('MismatchSenderId');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await expect(provider.send('token', 'title', 'body')).rejects.toThrow();
+    expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
-  it('não retenta em HTTP 4xx', async () => {
-    mockFetch.mockResolvedValueOnce(makeHttpError(400));
+  it('não retenta em invalid-argument', async () => {
+    mockSend.mockRejectedValueOnce(
+      makeFirebaseError('messaging/invalid-argument'),
+    );
 
-    await expect(provider.send('token', 'title', 'body')).rejects.toThrow('FCM HTTP 400');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await expect(provider.send('token', 'title', 'body')).rejects.toThrow();
+    expect(mockSend).toHaveBeenCalledTimes(1);
   });
 });

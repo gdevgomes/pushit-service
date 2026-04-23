@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createServer } from '../src/server';
 import type { JobState } from '../src/job';
+import type { PushProvider } from '../src/push';
 
 vi.mock('../src/logger', () => ({
   logger: {
@@ -22,6 +23,12 @@ vi.mock('../src/config', () => ({
   },
 }));
 
+vi.mock('../src/db', () => ({
+  db: { query: vi.fn().mockResolvedValue({ rows: [] }) },
+}));
+
+const mockProvider: PushProvider = { send: vi.fn() };
+
 function makeState(overrides: Partial<JobState> = {}): JobState {
   return {
     startedAt: new Date('2026-04-12T05:00:00.000Z'),
@@ -36,7 +43,7 @@ function makeState(overrides: Partial<JobState> = {}): JobState {
 
 describe('GET /status', () => {
   it('retorna status ok com estado inicial', async () => {
-    const app = createServer(makeState());
+    const app = createServer(makeState(), mockProvider);
 
     const res = await request(app).get('/status');
 
@@ -49,8 +56,8 @@ describe('GET /status', () => {
   });
 
   it('retorna uptime em segundos', async () => {
-    const startedAt = new Date(Date.now() - 3600_000); // 1 hora atrás
-    const app = createServer(makeState({ startedAt }));
+    const startedAt = new Date(Date.now() - 3600_000);
+    const app = createServer(makeState({ startedAt }), mockProvider);
 
     const res = await request(app).get('/status');
 
@@ -60,7 +67,7 @@ describe('GET /status', () => {
 
   it('retorna lastJobRun como ISO string quando definido', async () => {
     const lastRun = new Date('2026-04-12T06:00:00.000Z');
-    const app = createServer(makeState({ lastRun }));
+    const app = createServer(makeState({ lastRun }), mockProvider);
 
     const res = await request(app).get('/status');
 
@@ -69,7 +76,7 @@ describe('GET /status', () => {
 
   it('retorna lastJobStats quando definido', async () => {
     const lastStats = { due: 3, sent: 2, failed: 1, tokensDelivered: 10, tokensFailed: 2 };
-    const app = createServer(makeState({ lastStats }));
+    const app = createServer(makeState({ lastStats }), mockProvider);
 
     const res = await request(app).get('/status');
 
@@ -77,7 +84,7 @@ describe('GET /status', () => {
   });
 
   it('retorna totalSent e totalFailed acumulados', async () => {
-    const app = createServer(makeState({ totalSent: 142, totalFailed: 3 }));
+    const app = createServer(makeState({ totalSent: 142, totalFailed: 3 }), mockProvider);
 
     const res = await request(app).get('/status');
 
