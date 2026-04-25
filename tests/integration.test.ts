@@ -74,16 +74,17 @@ async function cleanup() {
 beforeAll(async () => {
   if (!process.env.RUN_INTEGRATION) return;
 
+  const url = process.env.DATABASE_URL!;
   pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
+    connectionString: url,
+    ssl: url.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
   });
 
   await cleanup();
 
   const userRes = await pool.query(
-    `INSERT INTO users (email, "passwordHash") VALUES ($1, $2) RETURNING id`,
-    ['integration-test@pushit.test', 'fakehash'],
+    `INSERT INTO users (email, "passwordHash", username) VALUES ($1, $2, $3) RETURNING id`,
+    ['integration-test@pushit.test', 'fakehash', 'integration-test-user'],
   );
   userId = userRes.rows[0].id;
 

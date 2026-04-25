@@ -8,7 +8,8 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 20_000,
     env: {
-      DATABASE_URL: 'postgresql://postgres:3aCrs0mLuo4GqQHN@db.leiiimdzblaqxghehigm.supabase.co:5432/postgres',
+      DATABASE_URL: 'postgresql://postgres:pushittest@localhost:5433/pushit_test?sslmode=disable',
+      RUN_INTEGRATION: 'true',
       FIREBASE_SERVICE_ACCOUNT_PATH: './serviceAccountKey.json',
       NODE_ENV: 'development',
       LOG_LEVEL: 'error',
